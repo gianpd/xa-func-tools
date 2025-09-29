@@ -137,6 +137,3 @@ If you want a production framework with every feature, use LangChain. If you wan
 MIT © [gianpd](https://github.com/gianpd) and contributors.
 
 Use it, modify it, learn from it. That's what open source is for.
-
-## License
-MIT © [gianpd](https://github.com/gianpd) and contributors.
