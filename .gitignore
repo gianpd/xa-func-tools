@@ -1,0 +1,26 @@
+__pycache__/
+*.json
+*.lock
+*.txt
+
+.env
+
+.git
+.git/
+.venv
+.venv/
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+.env
+.env.example
+uploads/  # Exclude local uploads; mount as volume
+.main.py  # Exclude the duplicate/artifact
+*.log
+.DS_Store
+Thumbs.db
+llm_logs/
+reports/

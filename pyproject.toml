@@ -1,0 +1,90 @@
+[project]
+name = "XA-FUNC-TOOLS"
+version = "0.1.0"
+description = "A Python Function Calling Agents framework with rich explainability logs"
+authors = [{ name = "gianpd", email = "gpdomiziani@gmail.com" }]
+license = { text = "MIT" }
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+
+    # PDF processing and image handling
+    "PyMuPDF>=1.23.0",
+    "Pillow>=10.0.0",
+    "markitdown[all]>=0.0.1a3",
+    "arxiv>=2.2.0",
+
+    # HTTP requests and web scraping
+    "requests",
+    "httpx",
+    "beautifulsoup4",
+    "aiohttp>=3.12.15",
+
+    # Search and scraping tools
+    "ddgs",
+    "googlesearch-python",
+    "stem",
+    "pysocks",
+    "websockets",
+    "playwright>=1.55.0",
+
+    # LLM API CALL
+    "openai>=1.99.5",
+
+    # Environment and configuration
+    "python-dotenv>=1.0.0",
+
+    # Additional utilities
+    "typing-extensions>=4.8.0",
+
+    # PDF generation for local test client
+    "reportlab",
+] # Dependencies from requirements.txt
+
+[project.optional-dependencies]
+dev = [
+    # Development and testing
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    # Development and testing
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.5.0",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+[tool.isort]
+profile = "black"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
