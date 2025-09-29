@@ -1,13 +1,13 @@
 """
-/**
  * @file web_search_tool.py
  * @purpose Web search tool using SerpApi for Google search results with comprehensive error handling
  * 
  * @dependencies
- * - requests: For HTTP API calls to SerpApi
+ * - aiohttp: For async HTTP API calls to SerpApi
+ * - asyncio: For async operations and sleep
  * - os: For environment variable access
  * - json: For response parsing
- * - time: For rate limiting and delays
+ * - time: For timing measurements
  * - typing: For type annotations
  *
  * @notes
@@ -16,13 +16,14 @@
  * - Handles various search result types (organic, featured snippets, etc.)
  * - Provides structured output for LLM consumption
  * - Error handling for API failures and malformed responses
- */
+ * - Fully asynchronous implementation using aiohttp
 """
 
 import os
 import json
 import time
-import requests
+import asyncio
+import aiohttp
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass
 from enum import Enum
@@ -85,45 +86,51 @@ class WebSearchTool:
         self.base_url = "https://serpapi.com/search"
         self.rate_limit_delay = rate_limit_delay
         self.last_request_time = 0
+        self.session: Optional[aiohttp.ClientSession] = None
         
         # Default search parameters
         self.default_params = {
             "engine": "google",
             "api_key": self.api_key,
-            "num": 10,  # Number of results
-            "safe": "active",  # Safe search
-            "hl": "en",  # Language
-            "gl": "us"  # Country
+            "num": 10,
+            "safe": "active",
+            "hl": "en",
+            "gl": "us"
         }
     
     async def __aenter__(self):
         """
         Asynchronous context manager entry.
-        No asynchronous setup is required for this tool, so it returns itself immediately.
+        Creates an aiohttp session for making requests.
         """
+        self.session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30),
+            headers={"User-Agent": "WebSearchTool/1.0"}
+        )
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """
         Asynchronous context manager exit.
-        No asynchronous cleanup is required for this tool.
+        Closes the aiohttp session.
         """
-        pass
+        if self.session:
+            await self.session.close()
     
-    def _respect_rate_limit(self):
-        """Implement rate limiting to avoid hitting API limits"""
+    async def _respect_rate_limit(self):
+        """Implement async rate limiting to avoid hitting API limits"""
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
         
         if time_since_last < self.rate_limit_delay:
             sleep_time = self.rate_limit_delay - time_since_last
-            time.sleep(sleep_time)
+            await asyncio.sleep(sleep_time)
         
         self.last_request_time = time.time()
     
-    def _make_request(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _make_request(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Make HTTP request to SerpApi with error handling
+        Make async HTTP request to SerpApi with error handling
         
         Args:
             params: Search parameters
@@ -134,34 +141,31 @@ class WebSearchTool:
         Raises:
             Exception: If request fails or returns error
         """
-        self._respect_rate_limit()
+        await self._respect_rate_limit()
+        
+        if not self.session:
+            raise RuntimeError("WebSearchTool must be used as an async context manager")
         
         try:
-            response = requests.get(
+            async with self.session.get(
                 self.base_url,
-                params=params,
-                timeout=30,
-                headers={
-                    "User-Agent": "WebSearchTool/1.0"
-                }
-            )
-            
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # Check for SerpApi errors
-            if "error" in data:
-                raise Exception(f"SerpApi error: {data['error']}")
-            
-            return data
-            
-        except requests.exceptions.Timeout:
+                params=params
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+                
+                # Check for SerpApi errors
+                if "error" in data:
+                    raise Exception(f"SerpApi error: {data['error']}")
+                
+                return data
+                
+        except asyncio.TimeoutError:
             raise Exception("Search request timed out")
-        except requests.exceptions.ConnectionError:
+        except aiohttp.ClientConnectionError:
             raise Exception("Failed to connect to SerpApi")
-        except requests.exceptions.HTTPError as e:
-            raise Exception(f"HTTP error: {e.response.status_code} - {e.response.text}")
+        except aiohttp.ClientResponseError as e:
+            raise Exception(f"HTTP error: {e.status} - {e.message}")
         except json.JSONDecodeError:
             raise Exception("Failed to parse API response as JSON")
         except Exception as e:
@@ -184,11 +188,29 @@ class WebSearchTool:
         
         return results
     
+    def _parse_news_results(self, news_results: List[Dict]) -> List[SearchResult]:
+        """Parse news search results"""
+        results = []
+        
+        for i, result in enumerate(news_results):
+            search_result = SearchResult(
+                title=result.get("title", ""),
+                link=result.get("link", ""),
+                snippet=result.get("snippet", ""),
+                source=result.get("source", ""),
+                result_type="news",
+                position=i + 1,
+                date=result.get("date"),
+                thumbnail=result.get("thumbnail")
+            )
+            results.append(search_result)
+        
+        return results
+    
     def _extract_featured_snippet(self, data: Dict) -> Optional[str]:
         """Extract featured snippet if available"""
         answer_box = data.get("answer_box")
         if answer_box:
-            # Try different snippet fields
             snippet = (
                 answer_box.get("snippet") or
                 answer_box.get("answer") or
@@ -218,10 +240,11 @@ class WebSearchTool:
             return [q.get("question", "") for q in related_questions[:5]]
         return None
     
-    def search(
+    async def search(
         self,
         query: str,
         num_results: int = 10,
+        parse_result_for_llm=True,
         result_types: Optional[List[str]] = None,
         location: Optional[str] = None,
         time_period: Optional[str] = None
@@ -233,6 +256,7 @@ class WebSearchTool:
             query: Search query string
             num_results: Number of results to return (1-100)
             result_types: Types of results to include (default: organic)
+            parse_result_for_llm: Boolean deciding if or not parsing result
             location: Geographic location for search
             time_period: Time period filter (e.g., 'past_year', 'past_month')
             
@@ -262,10 +286,7 @@ class WebSearchTool:
             params["tbs"] = f"qdr:{time_period}"
         
         search_start_time = time.time()
-        
-        # Make API request
-        data = self._make_request(params)
-        
+        data = await self._make_request(params)
         search_time = time.time() - search_start_time
         
         # Parse results
@@ -282,13 +303,12 @@ class WebSearchTool:
         total_results = search_info.get("total_results", len(parsed_results))
         
         if isinstance(total_results, str):
-            # Parse total results if it's a string like "About 1,234,567 results"
             try:
                 total_results = int(''.join(filter(str.isdigit, total_results)))
             except ValueError:
                 total_results = len(parsed_results)
         
-        return SearchResponse(
+        result = SearchResponse(
             query=query,
             results=parsed_results,
             total_results=total_results,
@@ -298,8 +318,10 @@ class WebSearchTool:
             related_questions=related_questions,
             search_metadata=search_info
         )
+
+        return self.format_results_for_llm(response=result) if parse_result_for_llm else result
     
-    def search_news(
+    async def search_news(
         self,
         query: str,
         num_results: int = 10,
@@ -319,7 +341,7 @@ class WebSearchTool:
         params = self.default_params.copy()
         params.update({
             "q": query.strip(),
-            "tbm": "nws",  # News search
+            "tbm": "nws",
             "num": num_results
         })
         
@@ -327,150 +349,144 @@ class WebSearchTool:
             params["tbs"] = f"qdr:{time_period}"
         
         search_start_time = time.time()
-        data = self._make_request(params)
+        data = await self._make_request(params)
         search_time = time.time() - search_start_time
         
         # Parse news results
         news_results = data.get("news_results", [])
-        parsed_results = []
+        parsed_results = self._parse_news_results(news_results)
         
-        for i, result in enumerate(news_results):
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                link=result.get("link", ""),
-                snippet=result.get("snippet", ""),
-                source=result.get("source", ""),
-                result_type="news",
-                position=i + 1,
-                date=result.get("date"),
-                thumbnail=result.get("thumbnail")
-            )
-            parsed_results.append(search_result)
+        search_info = data.get("search_information", {})
+        total_results = len(parsed_results)
         
         return SearchResponse(
             query=query,
             results=parsed_results,
-            total_results=len(parsed_results),
-            search_time=search_time
+            total_results=total_results,
+            search_time=search_time,
+            search_metadata=search_info
         )
-
-# Tool function for use with the FunctionCalling framework
-def web_search(
-    query: str,
-    num_results: int = 5,
-    search_type: str = "web",
-    location: Optional[str] = None,
-    time_period: Optional[str] = None
-) -> str:
-    """
-    Search the web using SerpApi and return formatted results
     
-    Args:
-        query: The search query string
-        num_results: Number of results to return (1-10, default: 5)
-        search_type: Type of search - "web" or "news" (default: "web")
-        location: Geographic location for search (optional)
-        time_period: Time filter - "past_day", "past_week", "past_month", "past_year" (optional)
+    async def search_images(
+        self,
+        query: str,
+        num_results: int = 10,
+        safe_search: bool = True
+    ) -> SearchResponse:
+        """
+        Search for images
+        
+        Args:
+            query: Search query
+            num_results: Number of image results
+            safe_search: Enable safe search filtering
+            
+        Returns:
+            SearchResponse with image results
+        """
+        params = self.default_params.copy()
+        params.update({
+            "q": query.strip(),
+            "tbm": "isch",
+            "num": num_results,
+            "safe": "active" if safe_search else "off"
+        })
+        
+        search_start_time = time.time()
+        data = await self._make_request(params)
+        search_time = time.time() - search_start_time
+        
+        # Parse image results
+        images = data.get("images_results", [])
+        results = []
+        
+        for i, img in enumerate(images):
+            search_result = SearchResult(
+                title=img.get("title", ""),
+                link=img.get("original", ""),
+                snippet=img.get("snippet", ""),
+                source=img.get("source", ""),
+                result_type="image",
+                position=i + 1,
+                thumbnail=img.get("thumbnail")
+            )
+            results.append(search_result)
+        
+        return SearchResponse(
+            query=query,
+            results=results,
+            total_results=len(results),
+            search_time=search_time,
+            search_metadata=data.get("search_information", {})
+        )
     
-    Returns:
-        Formatted search results as a string
+    def format_results_for_llm(self, response: SearchResponse, max_results: int = 5) -> str:
+        """
+        Format search results for LLM consumption
         
-    Examples:
-        web_search("artificial intelligence trends 2024")
-        web_search("climate change", num_results=3, time_period="past_month")
-        web_search("restaurants near me", location="New York, NY")
-        web_search("breaking news AI", search_type="news", num_results=5)
-    """
-    try:
-        # Initialize search tool
-        search_tool = WebSearchTool()
+        Args:
+            response: SearchResponse object
+            max_results: Maximum number of results to include
+            
+        Returns:
+            Formatted string suitable for LLM context
+        """
+        output = [f"Search Query: {response.query}"]
+        output.append(f"Total Results: {response.total_results:,}")
+        output.append(f"Search Time: {response.search_time:.2f}s\n")
         
-        # Validate inputs
-        num_results = max(1, min(num_results, 10))  # Clamp between 1-10
-        
-        # Perform search based on type
-        if search_type.lower() == "news":
-            response = search_tool.search_news(
-                query=query,
-                num_results=num_results,
-                time_period=time_period
-            )
-        else:
-            response = search_tool.search(
-                query=query,
-                num_results=num_results,
-                location=location,
-                time_period=time_period
-            )
-        
-        # Format results for LLM consumption
-        formatted_results = f"🔍 **Search Results for:** {query}\n"
-        formatted_results += f"📊 **Found:** {response.total_results:,} total results\n"
-        formatted_results += f"⏱️ **Search time:** {response.search_time:.2f} seconds\n\n"
-        
-        # Add featured snippet if available
         if response.featured_snippet:
-            formatted_results += f"💡 **Featured Answer:**\n{response.featured_snippet}\n\n"
+            output.append(f"Featured Snippet:\n{response.featured_snippet}\n")
         
-        # Add knowledge graph if available
         if response.knowledge_graph:
             kg = response.knowledge_graph
-            formatted_results += f"📚 **Knowledge Graph:**\n"
-            formatted_results += f"**{kg.get('title', 'N/A')}** ({kg.get('type', 'N/A')})\n"
-            if kg.get('description'):
-                formatted_results += f"{kg['description']}\n"
-            formatted_results += f"*Source: {kg.get('source', 'N/A')}*\n\n"
+            output.append(f"Knowledge Graph:")
+            output.append(f"  Title: {kg.get('title', 'N/A')}")
+            output.append(f"  Type: {kg.get('type', 'N/A')}")
+            output.append(f"  Description: {kg.get('description', 'N/A')}\n")
         
-        # Add search results
-        if response.results:
-            formatted_results += f"📋 **Top {len(response.results)} Results:**\n\n"
-            
-            for i, result in enumerate(response.results, 1):
-                formatted_results += f"**{i}. {result.title}**\n"
-                formatted_results += f"🔗 {result.link}\n"
-                if result.snippet:
-                    formatted_results += f"📝 {result.snippet}\n"
-                if result.date:
-                    formatted_results += f"📅 {result.date}\n"
-                formatted_results += f"🌐 Source: {result.source}\n\n"
-        else:
-            formatted_results += "❌ No results found for this query.\n"
+        output.append("Search Results:")
+        for i, result in enumerate(response.results[:max_results], 1):
+            output.append(f"\n{i}. {result.title}")
+            output.append(f"   URL: {result.link}")
+            output.append(f"   Snippet: {result.snippet}")
+            if result.date:
+                output.append(f"   Date: {result.date}")
         
-        # Add related questions if available
         if response.related_questions:
-            formatted_results += f"❓ **Related Questions:**\n"
-            for question in response.related_questions:
-                formatted_results += f"• {question}\n"
-            formatted_results += "\n"
+            output.append("\nRelated Questions:")
+            for q in response.related_questions:
+                output.append(f"  - {q}")
         
-        return formatted_results.strip()
-        
-    except ValueError as e:
-        return f"❌ **Search Error:** Invalid input - {str(e)}"
-    except Exception as e:
-        return f"❌ **Search Error:** {str(e)}"
+        return "\n".join(output)
 
-# Example usage and testing
+
+# Example usage
+async def main():
+    """Example usage of WebSearchTool"""
+    async with WebSearchTool() as search_tool:
+        # Standard web search
+        print("="*60)
+        print("STANDARD WEB SEARCH")
+        print("="*60)
+        response = await search_tool.search(
+            query="Python async programming best practices",
+            num_results=5,
+            parse_result_for_llm=True
+        )
+        print(search_tool.format_results_for_llm(response))
+        
+        print("\n" + "="*60)
+        print("NEWS SEARCH")
+        print("="*60)
+        # News search
+        news_response = await search_tool.search_news(
+            query="artificial intelligence breakthroughs",
+            num_results=5,
+            time_period="past_week"
+        )
+        print(search_tool.format_results_for_llm(news_response))
+
+
 if __name__ == "__main__":
-    # Test the web search tool
-    try:
-        # Test basic search
-        result = web_search("Python programming best practices", num_results=3)
-        print("=== Basic Search Test ===")
-        print(result)
-        print("\n" + "="*50 + "\n")
-        
-        # Test news search
-        news_result = web_search("AI developments", search_type="news", num_results=3, time_period="past_week")
-        print("=== News Search Test ===")
-        print(news_result)
-        
-    except Exception as e:
-        print(f"Test failed: {e}")
-        
-    # Test with FunctionCalling framework
-    print("\n=== Function Schema ===")
-    from inspect import signature
-    print(f"Function: {web_search.__name__}")
-    print(f"Signature: {signature(web_search)}")
-    print(f"Docstring: {web_search.__doc__}")
+    asyncio.run(main())

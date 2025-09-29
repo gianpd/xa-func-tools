@@ -58,7 +58,7 @@ from src.function_calling.tools import WebScraper
 
 async def main():
     async with WebScraper() as scraper:
-        agent = FunctionCalling(model="anthropic/claude-3.5-sonnet", max_turns=5)
+        agent = FunctionCalling(model="qwen/qwen3-next-80b-a3b-thinking", max_turns=5)
         agent.register_tool(scraper.scrape_text)
         
         answer, log = await agent.run_async("What's on the front page of example.com?")
