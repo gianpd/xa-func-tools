@@ -474,7 +474,7 @@ async def main():
             num_results=5,
             parse_result_for_llm=True
         )
-        print(search_tool.format_results_for_llm(response))
+        print(response)
         
         print("\n" + "="*60)
         print("NEWS SEARCH")
