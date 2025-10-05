@@ -319,7 +319,7 @@ class WebSearchTool:
             search_metadata=search_info
         )
 
-        return self.format_results_for_llm(response=result) if parse_result_for_llm else result
+        return result
     
     async def search_news(
         self,

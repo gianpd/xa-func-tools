@@ -12,8 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from src.function_calling import FunctionCalling
-from src.function_calling.tools import WebScraper, URLContextTool
-from src.function_calling.tools import WebSearchTool
+from src.function_calling.tools.research_pipeline import WebResearchPipeline, ResearchResult, SearchResult
+from src.function_calling.core import call_llm
 
 # Configure comprehensive logging (restored from original for better observability)
 logging.basicConfig(
@@ -50,6 +50,7 @@ class ResearchSource:
             'metadata': self.metadata
         }
 
+
 @dataclass 
 class ResearchReport:
     """Comprehensive research report structure."""
@@ -83,6 +84,7 @@ class ResearchReport:
             'recommendations': self.recommendations,
             'created_at': self.created_at
         }
+    
 
 class PremiumResearchAgent:
     """Simplified AI research agent leveraging AI for most analysis tasks."""
@@ -130,14 +132,10 @@ class PremiumResearchAgent:
 **RESEARCH WORKFLOW:**
 1. **QUERY GENERATION**: Create up to {self.max_queries} strategic search queries from the user's request.
 2. **SEARCH EXECUTION**: Use the `search` tool for each query, collecting all relevant results.
-3. **SOURCE VALIDATION**: For promising URLs from search results, use `analyze_url` to check security/credibility. Prioritize URLs with a security score of at least {self.min_security_score}.
-4. **CONTENT EXTRACTION**: For up to {self.max_sources} validated and credible URLs, use `scrape_text` to extract their full content.
-5. **ANALYSIS & SYNTHESIS**: Analyze the extracted content. For each *selected* source, identify its title, summarize its content, extract key points, and assess its credibility (0.0-1.0) and relevance (0.0-1.0) to the original research request. Synthesize all information to form key findings, an executive summary, a detailed analysis, limitations, and recommendations.
+3. **ANALYSIS & SYNTHESIS**: Analyze the extracted content. For each *selected* source, identify its title, summarize its content, extract key points, and assess its credibility (0.0-1.0) and relevance (0.0-1.0) to the original research request. Synthesize all information to form key findings, an executive summary, a detailed analysis, limitations, and recommendations.
 
 **TOOL USAGE:**
 - search(query: str, num_results: int = 10): Execute web searches and return a list of search results.
-- analyze_url(url: str): Validate URL security and provide context. Returns a dict like {{'security_score': 85, 'trust_score': 0.7, ...}}.
-- scrape_text(url: str): Extract full content from a URL. Returns a string.
 
 **OUTPUT REQUIREMENTS:**
 After completing all research steps, provide the comprehensive analysis in this JSON format:
@@ -165,7 +163,6 @@ After completing all research steps, provide the comprehensive analysis in this 
 }}
 
 **QUALITY STANDARDS:**
-- Only consider and include sources with security scores ≥ {self.min_security_score} in your 'sources_analyzed' list.
 - Prioritize authoritative domains (.edu, .gov, established organizations) when selecting sources.
 - Extract meaningful insights and synthesize across sources.
 - Provide evidence-based conclusions with proper attribution (e.g., [Source 1], [Source 2]).
@@ -180,14 +177,10 @@ After completing all research steps, provide the comprehensive analysis in this 
         
         try:
             async with (
-                WebSearchTool() as searcher,
-                WebScraper() as scraper, 
-                URLContextTool() as url_context
+               WebResearchPipeline(llm_callable=call_llm) as searcher
             ):
                 # Register tools
-                self.agent.register_tool(searcher.search)
-                self.agent.register_tool(scraper.scrape_text)
-                self.agent.register_tool(url_context.analyze_url)
+                self.agent.register_tool(searcher.research)
                 
                 # Execute research
                 final_answer, execution_log = await self.agent.run_async(
@@ -218,7 +211,7 @@ After completing all research steps, provide the comprehensive analysis in this 
         # Parse execution log for actual tool results (updated to pass self.stats)
         execution_data = self._parse_execution_log(execution_log, self.stats)
         
-        sources: List[ResearchSource] = []
+        sources: List[SearchResult] = []
         for source_data in analysis_data.get('sources_analyzed', []):
             try:
                 url = source_data.get('url', '')
@@ -240,7 +233,7 @@ After completing all research steps, provide the comprehensive analysis in this 
                     continue
 
                 if actual_content: # Ensure we have content
-                    source = ResearchSource(
+                    source = ResearchResult(
                         title=source_data.get('title', 'Unknown Title'),
                         url=url,
                         content=actual_content,
@@ -325,9 +318,9 @@ After completing all research steps, provide the comprehensive analysis in this 
                     args = json.loads(tool_call.get('function', {}).get('arguments', '{}'))
                     result = tool_results[i] if i < len(tool_results) else None
                     
-                    if function_name == 'search':
+                    if function_name == 'research':
                         stats['total_searches_performed'] += 1 # Update stats
-                        if isinstance(result, dict) and 'results' in result: # Assuming SerperLikeWebSearcher returns dict with 'results'
+                        if isinstance(result, dict) and 'results' in result:
                             data['search_results'].extend(result['results'])
                             data['total_search_results'] += len(result['results'])
                             stats['total_search_results_gathered'] += len(result['results']) # Update stats

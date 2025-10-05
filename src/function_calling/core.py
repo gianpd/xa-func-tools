@@ -58,7 +58,7 @@ class LLMConfig:
 llm_config = LLMConfig()
 
 def call_llm_with_tools(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]] = None, 
-                       temperature: Optional[float] = None, model: Optional[str] = None) -> Dict[str, Any]:
+                       temperature: Optional[float] = None, model: Optional[str] = None, base_url=None) -> Dict[str, Any]:
     """
     Production-ready LLM interface function with function calling support
     
@@ -150,7 +150,7 @@ def call_llm_with_tools(messages: List[Dict[str, Any]], tools: List[Dict[str, An
     
     raise Exception("All LLM call attempts failed")
 
-def call_llm(prompt: str, system_prompt: Optional[str] = None, temperature: Optional[float] = None, model: Optional[str] = None) -> str:
+def call_llm(prompt: str, system_prompt: Optional[str] = None, temperature: Optional[float] = None, model: Optional[str] = None, api_key=None, base_url=None) -> str:
     """
     Simple LLM interface function for backward compatibility
     
@@ -165,10 +165,12 @@ def call_llm(prompt: str, system_prompt: Optional[str] = None, temperature: Opti
     """
     messages = []
     if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+        # Ensure system_prompt is string
+        messages.append({"role": "system", "content": str(system_prompt)})
+    # Ensure prompt is string
+    messages.append({"role": "user", "content": str(prompt)})
     
-    response = call_llm_with_tools(messages, tools=None, temperature=temperature, model=model)
+    response = call_llm_with_tools(messages, tools=None, temperature=temperature, model=model, api_key=api_key, base_url=base_url)
     return response["content"] or ""
 
 # Import LLMLogger
