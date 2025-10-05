@@ -1,0 +1,74 @@
+# Experiment Configuration for ExperimentTracker
+# Compatible with the generalizable agentic workflow implementation
+
+# Logging configuration - defines where experiment runs are stored
+logging:
+  base_dir: "logs/runs"  # Base directory for experiment tracking
+  level: "INFO"
+  log_llm_calls: true
+  log_component_events: true
+  save_prompts: true
+  save_responses: true
+
+# Workflow execution strategy
+workflow:
+  execution_strategy: "hybrid"  # Options: "direct", "llm_mediated", "hybrid"
+  max_iterations: 10
+  early_stopping_enabled: true
+
+# Component configurations matching the actual components
+components:
+  solver:
+    max_retries: 3
+    fallback_parsing: true
+    enable_tools: true
+    model: "qwen/qwen3-next-80b-a3b-thinking"
+    
+  executor:
+    parallel_execution: false
+    max_retries: 2
+
+# LLM configuration (if needed globally)
+llm:
+  provider: "openrouter"
+  default_model: "qwen/qwen3-next-80b-a3b-thinking"
+  temperature: 0.7
+  max_tokens: 4096
+  timeout: 120
+
+# Experiment metadata
+experiment:
+  name: "generalizable_agentic_workflow"
+  description: "Multi-component agentic workflow with tracking"
+  version: "1.0.0"
+  tags:
+    - agentic-workflow
+    - problem-solving
+    - multi-step
+
+# Artifact persistence settings
+artifacts:
+  save_intermediate: true
+  save_prompts: true
+  save_responses: true
+  save_critiques: true
+  save_refinements: true
+  compress_large_files: false
+
+# Context management
+context:
+  max_evidence_items: 100
+  compression_enabled: true
+  relevance_threshold: 0.5
+
+# Tool registry settings (for generalizable workflow)
+tools:
+  enable_default_tools: true
+  timeout_seconds: 300
+  max_parallel_tools: 3
+
+# Reproducibility settings
+reproducibility:
+  capture_git_version: true
+  capture_environment: true
+  random_seed: 42

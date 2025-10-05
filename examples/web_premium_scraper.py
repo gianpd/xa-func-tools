@@ -7,6 +7,8 @@ import asyncio
 import json
 import logging
 import time
+import os
+import argparse
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,7 @@ from typing import List, Dict, Any, Optional
 from src.function_calling import FunctionCalling
 from src.function_calling.tools.research_pipeline import WebResearchPipeline, ResearchResult, SearchResult
 from src.function_calling.core import call_llm
+from src.experiments.tracking import ExperimentTracker
 
 # Configure comprehensive logging (restored from original for better observability)
 logging.basicConfig(
@@ -94,7 +97,8 @@ class PremiumResearchAgent:
                  max_queries: int = 5,
                  max_sources: int = 3,
                  min_security_score: int = 60,
-                 min_credibility_score: float = 0.3): # Restored min_credibility_score
+                 min_credibility_score: float = 0.3,
+                 tracker: Optional[ExperimentTracker]=None):
         self.ai_model = ai_model
         self.max_queries = max_queries
         self.max_sources = max_sources
@@ -125,13 +129,15 @@ class PremiumResearchAgent:
         # Create directories
         Path("logs").mkdir(exist_ok=True)
         Path("reports").mkdir(exist_ok=True)
+
+        self.tracker = tracker
     
     def _create_system_prompt(self) -> str:
         return f"""You are an expert AI research analyst. Execute comprehensive research using available tools:
 
 **RESEARCH WORKFLOW:**
 1. **QUERY GENERATION**: Create up to {self.max_queries} strategic search queries from the user's request.
-2. **SEARCH EXECUTION**: Use the `search` tool for each query, collecting all relevant results.
+2. **SEARCH EXECUTION**: Use the `research` tool for each query, collecting all relevant results.
 3. **ANALYSIS & SYNTHESIS**: Analyze the extracted content. For each *selected* source, identify its title, summarize its content, extract key points, and assess its credibility (0.0-1.0) and relevance (0.0-1.0) to the original research request. Synthesize all information to form key findings, an executive summary, a detailed analysis, limitations, and recommendations.
 
 **TOOL USAGE:**
@@ -169,6 +175,24 @@ After completing all research steps, provide the comprehensive analysis in this 
 - Acknowledge limitations and potential biases transparently.
 - Ensure all scores (credibility, relevance, confidence) are float values between 0.0 and 1.0."""
     
+    def _extract_tool_insights(self, execution_logs: List[Dict]) -> Dict[str, Any]:
+        """Extracts insights from tool execution logs."""
+        insights = {
+            "tool_calls_made": [],
+            "tool_results": [],
+            "agent_thoughts": [],
+            "turns_completed": len(execution_logs),
+        }
+        for turn in execution_logs:
+            if isinstance(turn, dict):
+                if "thought" in turn and turn["thought"]:
+                    insights["agent_thoughts"].append(turn["thought"])
+                if "tool_calls" in turn and turn["tool_calls"]:
+                    insights["tool_calls_made"].extend(turn["tool_calls"])
+                if "tool_results" in turn and turn["tool_results"]:
+                    insights["tool_results"].extend(turn["tool_results"])
+        return insights
+    
     async def conduct_research(self, user_request: str) -> ResearchReport:
         """Main research execution method."""
         start_time = time.time()
@@ -192,6 +216,13 @@ After completing all research steps, provide the comprehensive analysis in this 
                 report = await self._parse_and_generate_report(
                     user_request, final_answer, execution_log, time.time() - start_time
                 )
+
+                if self.tracker and ExperimentTracker is not None:
+                    tool_insights = self._extract_tool_insights(execution_log)
+                    self.tracker.write_artifact("function_caller", "tool_insights.json", {
+                    "final_answer": final_answer,
+                    "insights": tool_insights})
+                    self.tracker.log_event("workflow", "func_caller_end")
                 
                 await self._save_report(report)
                 logger.info(f"🔬 Research completed in {time.time() - start_time:.2f}s")
@@ -390,16 +421,87 @@ After completing all research steps, provide the comprehensive analysis in this 
         except Exception as e:
             logger.error(f"🔬 Failed to save report: {e}")
 
-async def main():
+def display_research_results(report, agent=None):
+    """
+    Returns a formatted string representation of the research report instead of printing it.
+    
+    Args:
+        report: The research report object.
+        agent: Optional agent object for statistics.
+    
+    Returns:
+        str: The complete formatted string.
+    """
+    result = []
+    
+    # Display results
+    result.append("\n📋 RESEARCH RESULTS")
+    result.append("=" * 50)
+    result.append(f"📝 Request: {report.request}")
+    result.append(f"⏱️  Time: {report.research_time:.2f}s")
+    result.append(f"🔍 Queries Generated: {len(report.generated_queries)}")
+    result.append(f"📊 Sources Analyzed: {report.sources_analyzed}")
+    result.append(f"🎯 Confidence: {report.confidence_score:.2%}")
+    
+    if report.generated_queries:
+        result.append("\n📋 SEARCH QUERIES:")
+        for i, query in enumerate(report.generated_queries, 1):
+            result.append(f"  {i}. {query}")
+    
+    result.append(f"\n🔑 KEY FINDINGS:")
+    for i, finding in enumerate(report.key_findings, 1):
+        result.append(f"  {i}. {finding}")
+    
+    result.append(f"\n📖 EXECUTIVE SUMMARY:")
+    result.append(f"{report.executive_summary}")
+    
+    if report.sources:
+        result.append(f"\n📚 ANALYZED SOURCES:")
+        for i, source in enumerate(report.sources, 1):
+            result.append(f"\n{i}. {source.title}")
+            result.append(f"   🔗 {source.url}")
+            result.append(f"   ⭐ Credibility: {source.credibility_score:.2f}")
+            result.append(f"   🔒 Security: {source.security_score}")
+            result.append(f"   📊 Relevance: {source.relevance_score:.2f}")
+            result.append(f"   📝 Words: {source.word_count:,}")
+            if source.key_points:
+                result.append(f"   💡 Key: {source.key_points[0][:80]}...")
+            result.append(f"   💬 Summary: {source.summary}")
+    
+    result.append(f"\n💡 RECOMMENDATIONS:")
+    for i, rec in enumerate(report.recommendations, 1):
+        result.append(f"  {i}. {rec}")
+
+    if report.limitations:
+        result.append(f"\n⚠️  LIMITATIONS:")
+        for i, limitation in enumerate(report.limitations, 1):
+            result.append(f"  {i}. {limitation}")
+
+    # Display statistics (restored for enterprise features)
+    if agent and hasattr(agent, 'stats'):
+        stats = agent.stats
+        result.append(f"\n📈 AGENT STATISTICS:")
+        result.append(f"  • Total Requests: {stats['total_requests']}")
+        result.append(f"  • Queries Generated: {stats['total_queries_generated']}")
+        result.append(f"  • Searches Performed: {stats['total_searches_performed']}")
+        result.append(f"  • Total Search Results Gathered: {stats['total_search_results_gathered']}")
+        result.append(f"  • Sources Analyzed: {stats['total_sources_analyzed']}")
+        result.append(f"  • Security Rejections: {stats['security_rejections']}")
+        result.append(f"  • Credibility Rejections: {stats['credibility_rejections']}")
+    
+    return '\n'.join(result)
+
+async def main(tracker):
     """Demo the simplified research agent."""
     print("🔬 Premium AI Research Agent - Simplified")
     print("=" * 50)
-    
+
     agent = PremiumResearchAgent(
         max_queries=5,
         max_sources=3,
         min_security_score=60,
-        min_credibility_score=0.3 # Passed to agent for internal use
+        min_credibility_score=0.3,
+        tracker=tracker
     )
     
     research_topics = [
@@ -407,6 +509,7 @@ async def main():
         "Renewable energy investment opportunities and market outlook", 
         "Cybersecurity threats and best practices for small businesses"
     ]
+
     
     print("Available research topics:")
     for i, topic in enumerate(research_topics, 1):
@@ -429,63 +532,23 @@ async def main():
         
         print(f"\n🔬 Researching: '{user_request}'")
         print("=" * 50)
+
+        if agent.tracker and ExperimentTracker is not None:
+            # Derive base_dir from config or default
+            if not getattr(agent.tracker, "_started", False):
+                agent.tracker.config = agent.tracker.config or {}
+                agent.tracker.start_run(input_text=user_request)
+            agent.tracker.log_event("workflow", "run_started", {"max_queries": agent.max_queries})
         
         # Conduct research
         report = await agent.conduct_research(user_request)
         
         # Display results
-        print(f"\n📋 RESEARCH RESULTS")
-        print("=" * 50)
-        print(f"📝 Request: {report.request}")
-        print(f"⏱️  Time: {report.research_time:.2f}s")
-        print(f"🔍 Queries Generated: {len(report.generated_queries)}") # Updated label
-        print(f"📊 Sources Analyzed: {report.sources_analyzed}") # Updated label
-        print(f"🎯 Confidence: {report.confidence_score:.2%}")
-        
-        if report.generated_queries:
-            print(f"\n📋 SEARCH QUERIES:")
-            for i, query in enumerate(report.generated_queries, 1):
-                print(f"  {i}. {query}")
-        
-        print(f"\n🔑 KEY FINDINGS:")
-        for i, finding in enumerate(report.key_findings, 1):
-            print(f"  {i}. {finding}")
-        
-        print(f"\n📖 EXECUTIVE SUMMARY:")
-        print(f"{report.executive_summary}")
-        
-        if report.sources:
-            print(f"\n📚 ANALYZED SOURCES:")
-            for i, source in enumerate(report.sources, 1):
-                print(f"\n{i}. {source.title}")
-                print(f"   🔗 {source.url}")
-                print(f"   ⭐ Credibility: {source.credibility_score:.2f}")
-                print(f"   🔒 Security: {source.security_score}")
-                print(f"   📊 Relevance: {source.relevance_score:.2f}")
-                print(f"   📝 Words: {source.word_count:,}") # Display word count
-                if source.key_points:
-                    print(f"   💡 Key: {source.key_points[0][:80]}...")
-                print(f"   💬 Summary: {source.summary}") # Display summary
-        
-        print(f"\n💡 RECOMMENDATIONS:")
-        for i, rec in enumerate(report.recommendations, 1):
-            print(f"  {i}. {rec}")
+        structured_report = display_research_results(report=report)
 
-        if report.limitations:
-            print(f"\n⚠️  LIMITATIONS:")
-            for i, limitation in enumerate(report.limitations, 1):
-                print(f"  {i}. {limitation}")
-
-        # Display statistics (restored for enterprise features)
-        stats = agent.stats
-        print(f"\n📈 AGENT STATISTICS:")
-        print(f"  • Total Requests: {stats['total_requests']}")
-        print(f"  • Queries Generated: {stats['total_queries_generated']}")
-        print(f"  • Searches Performed: {stats['total_searches_performed']}")
-        print(f"  • Total Search Results Gathered: {stats['total_search_results_gathered']}")
-        print(f"  • Sources Analyzed: {stats['total_sources_analyzed']}")
-        print(f"  • Security Rejections: {stats['security_rejections']}")
-        print(f"  • Credibility Rejections: {stats['credibility_rejections']}")
+        if agent.tracker:
+            agent.tracker.write_artifact("workflow", "final_report.txt", structured_report)
+            agent.tracker.log_event("workflow", "end", {"report_len": len(structured_report)})
 
         print(f"\n💾 Full report saved to reports/ directory")
         
@@ -496,7 +559,28 @@ async def main():
         logger.error(f"Main execution error: {e}", exc_info=True)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Agentic Workflow")
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML/JSON configuration file")  # NEW
+
+    args = parser.parse_args()
+    
+    # Load optional external configuration
+    cfg: Optional[Dict[str, Any]] = None
+    tracker: Optional["ExperimentTracker"] = None
+    if args.config:
+        if ExperimentTracker is None:
+            raise RuntimeError("ExperimentTracker module is not available but --config was provided.")
+        cfg = ExperimentTracker.load_yaml_config(args.config)
+        # Resolve base logs dir for run tracking
+        logs_base = None
+        try:
+            # Attempt to read nested logging path if provided
+            logs_base = cfg.get("logging", {}).get("base_dir")
+        except Exception:
+            logs_base = None
+        tracker = ExperimentTracker(base_dir=logs_base, config=cfg)
+
     # Ensure event loop policy is set for Windows compatibility (from original version)
     if hasattr(asyncio, 'WindowsProactorEventLoopPolicy'):
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    asyncio.run(main())
+    asyncio.run(main(tracker=tracker))

@@ -58,7 +58,7 @@ class LLMConfig:
 llm_config = LLMConfig()
 
 def call_llm_with_tools(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]] = None, 
-                       temperature: Optional[float] = None, model: Optional[str] = None, base_url=None) -> Dict[str, Any]:
+                       temperature: Optional[float] = None, model: Optional[str] = None, api_key=None, base_url=None) -> Dict[str, Any]:
     """
     Production-ready LLM interface function with function calling support
     

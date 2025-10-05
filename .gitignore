@@ -22,5 +22,7 @@ uploads/  # Exclude local uploads; mount as volume
 *.log
 .DS_Store
 Thumbs.db
+logs/
 llm_logs/
 reports/
+progress.md

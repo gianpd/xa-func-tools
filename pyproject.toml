@@ -43,6 +43,7 @@ dependencies = [
 
     # Additional utilities
     "typing-extensions>=4.8.0",
+    "pyyaml>=6.0.3",
 
     # PDF generation for local test client
     "reportlab",
